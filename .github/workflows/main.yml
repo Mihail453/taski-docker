@@ -1,4 +1,3 @@
-
 name: Main Taski workflow
 
 on:
@@ -127,39 +126,10 @@ jobs:
       - build_and_push_to_docker_hub
       - build_frontend_and_push_to_docker_hub
       - build_gateway_and_push_to_docker_hub
-    
     steps:
       - name: Checkout repo
         uses: actions/checkout@v3
-      
-      - name: Debug - Check files
-        run: |
-          echo "=== Current directory ==="
-          pwd
-          echo "=== Files ==="
-          ls -la
-          echo "=== docker-compose exists ==="
-          test -f "docker-compose.production.yml" && echo "YES" || echo "NO"
-      
-      - name: Test SSH connection
-        uses: appleboy/ssh-action@master
-        with:
-          host: ${{ secrets.HOST }}
-          username: ${{ secrets.USER }}
-          key: ${{ secrets.SSH_KEY }}
-          passphrase: ${{ secrets.SSH_PASSPHRASE }}
-          script: |
-            echo "=== SERVER INFO ==="
-            echo "Date: $(date)"
-            echo "User: $(whoami)"
-            echo "Directory: $(pwd)"
-            echo "=== DOCKER INFO ==="
-            docker --version || echo "Docker not installed"
-            docker compose version || echo "Docker Compose not installed"
-            echo "=== TASK DIRECTORY ==="
-            ls -la ~/taski || echo "taski directory not found"
-      
-      - name: Copy compose file
+      - name: Copy docker-compose.yml via ssh
         uses: appleboy/scp-action@master
         with:
           host: ${{ secrets.HOST }}
@@ -167,10 +137,8 @@ jobs:
           key: ${{ secrets.SSH_KEY }}
           passphrase: ${{ secrets.SSH_PASSPHRASE }}
           source: "docker-compose.production.yml"
-          target: "/home/${{ secrets.USER }}/taski/"
-          rm: true
-      
-      - name: Execute deployment
+          target: "taski"
+      - name: Executing remote ssh commands to deploy
         uses: appleboy/ssh-action@master
         with:
           host: ${{ secrets.HOST }}
@@ -178,49 +146,10 @@ jobs:
           key: ${{ secrets.SSH_KEY }}
           passphrase: ${{ secrets.SSH_PASSPHRASE }}
           script: |
-            echo "=== STARTING DEPLOYMENT ==="
-            echo "Date: $(date)"
-            
-            echo "=== CHANGING DIRECTORY ==="
-            cd "/home/${{ secrets.USER }}/taski" || {
-              echo "❌ ERROR: Can't cd to directory";
-              exit 1;
-            }
-            
-            echo "=== CURRENT IMAGES ==="
-            docker images || echo "Failed to list images"
-            
-            echo "=== PULLING IMAGES ==="
-            docker compose -f docker-compose.production.yml pull || {
-              echo "❌ ERROR: Failed to pull images";
-              exit 1;
-            }
-            
-            echo "=== STOPPING OLD CONTAINERS ==="
-            docker compose -f docker-compose.production.yml down || {
-              echo "⚠ WARNING: Failed to stop old containers";
-            }
-            
-            echo "=== STARTING NEW CONTAINERS ==="
-            docker compose -f docker-compose.production.yml up -d || {
-              echo "❌ ERROR: Failed to start containers";
-              docker compose -f docker-compose.production.yml logs;
-              exit 1;
-            }
-            
-            echo "=== RUNNING MIGRATIONS ==="
-            docker compose -f docker-compose.production.yml exec backend python manage.py migrate --no-input || {
-              echo "❌ ERROR: Migrations failed";
-              exit 1;
-            }
-            
-            echo "=== COLLECTING STATIC ==="
-            docker compose -f docker-compose.production.yml exec backend python manage.py collectstatic --no-input || {
-              echo "❌ ERROR: Static collection failed";
-              exit 1;
-            }
-            
-            echo "=== DEPLOYMENT COMPLETE ==="
-            echo "Date: $(date)"
-            echo "=== RUNNING CONTAINERS ==="
-            docker ps
+            cd taski
+            sudo docker compose -f docker-compose.production.yml pull
+            sudo docker compose -f docker-compose.production.yml down
+            sudo docker compose -f docker-compose.production.yml up -d
+            sudo docker compose -f docker-compose.production.yml exec backend python manage.py migrate
+            sudo docker compose -f docker-compose.production.yml exec backend python manage.py collectstatic
+            sudo docker compose -f docker-compose.production.yml exec backend cp -r /app/collected_static/. /backend_static/static/
