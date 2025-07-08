@@ -121,35 +121,120 @@ jobs:
           tags: mis20/taski_gateway:latest
 
   deploy:
-    runs-on: ubuntu-latest
-    needs: 
-      - build_and_push_to_docker_hub
-      - build_frontend_and_push_to_docker_hub
-      - build_gateway_and_push_to_docker_hub
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v3
-      - name: Copy docker-compose.yml via ssh
-        uses: appleboy/scp-action@master
-        with:
-          host: ${{ secrets.HOST }}
-          username: ${{ secrets.USER }}
-          key: ${{ secrets.SSH_KEY }}
-          passphrase: ${{ secrets.SSH_PASSPHRASE }}
-          source: "docker-compose.production.yml"
-          target: "taski"
-      - name: Executing remote ssh commands to deploy
-        uses: appleboy/ssh-action@master
-        with:
-          host: ${{ secrets.HOST }}
-          username: ${{ secrets.USER }}
-          key: ${{ secrets.SSH_KEY }}
-          passphrase: ${{ secrets.SSH_PASSPHRASE }}
-          script: |
-            cd taski
-            sudo docker compose -f docker-compose.production.yml pull
-            sudo docker compose -f docker-compose.production.yml down
-            sudo docker compose -f docker-compose.production.yml up -d
-            sudo docker compose -f docker-compose.production.yml exec backend python manage.py migrate
-            sudo docker compose -f docker-compose.production.yml exec backend python manage.py collectstatic
-            sudo docker compose -f docker-compose.production.yml exec backend cp -r /app/collected_static/. /backend_static/static/
+  runs-on: ubuntu-latest
+  needs: 
+    - build_and_push_to_docker_hub
+    - build_frontend_and_push_to_docker_hub
+    - build_gateway_and_push_to_docker_hub
+  
+  steps:
+    # Шаг 1: Проверка репозитория
+    - name: Checkout repo
+      uses: actions/checkout@v3
+    
+    # Шаг 2: Проверка docker-compose файла
+    - name: Verify compose file
+      run: |
+        echo "=== Проверка docker-compose.production.yml ==="
+        ls -la
+        if [ ! -f "docker-compose.production.yml" ]; then
+          echo "❌ ОШИБКА: docker-compose.production.yml не найден!"
+          exit 1
+        else
+          echo "✅ Файл существует"
+          echo "=== Содержимое docker-compose ==="
+          head -n 20 docker-compose.production.yml
+        fi
+    
+    # Шаг 3: Проверка SSH подключения
+    - name: Test SSH connection
+      uses: appleboy/ssh-action@master
+      with:
+        host: ${{ secrets.HOST }}
+        username: ${{ secrets.USER }}
+        key: ${{ secrets.SSH_KEY }}
+        passphrase: ${{ secrets.SSH_PASSPHRASE }}
+        script: |
+          echo "=== Информация о сервере ==="
+          echo "Дата: $(date)"
+          echo "Пользователь: $(whoami)"
+          echo "Директория: $(pwd)"
+          echo "=== Docker информация ==="
+          docker --version || echo "Docker не установлен"
+          docker compose version || echo "Docker Compose не установлен"
+          echo "=== Содержимое папки taski ==="
+          ls -la ~/taski || echo "Папка taski не существует"
+    
+    # Шаг 4: Копирование файлов с логированием
+    - name: Copy compose file
+      uses: appleboy/scp-action@master
+      with:
+        host: ${{ secrets.HOST }}
+        username: ${{ secrets.USER }}
+        key: ${{ secrets.SSH_KEY }}
+        passphrase: ${{ secrets.SSH_PASSPHRASE }}
+        source: "docker-compose.production.yml"
+        target: "/home/${{ secrets.USER }}/taski/"
+        rm: true
+    
+    # Шаг 5: Деплой с подробным логированием
+    - name: Execute deployment
+      uses: appleboy/ssh-action@master
+      with:
+        host: ${{ secrets.HOST }}
+        username: ${{ secrets.USER }}
+        key: ${{ secrets.SSH_KEY }}
+        passphrase: ${{ secrets.SSH_PASSPHRASE }}
+        script: |
+          echo "=== НАЧАЛО ДЕПЛОЯ ==="
+          echo "Дата: $(date)"
+          echo "Текущая директория: $(pwd)"
+          
+          echo "=== Переход в рабочую директорию ==="
+          cd "/home/${{ secrets.USER }}/taski" || {
+            echo "❌ ОШИБКА: Не удалось перейти в директорию";
+            exit 1;
+          }
+          
+          echo "=== Текущие образы ==="
+          docker images || echo "Не удалось получить список образов"
+          
+          echo "=== Pull образов ==="
+          docker compose -f docker-compose.production.yml pull || {
+            echo "❌ ОШИБКА при pull образов";
+            exit 1;
+          }
+          
+          echo "=== Остановка старых контейнеров ==="
+          docker compose -f docker-compose.production.yml down || {
+            echo "⚠ Предупреждение: не удалось остановить старые контейнеры";
+          }
+          
+          echo "=== Запуск новых контейнеров ==="
+          docker compose -f docker-compose.production.yml up -d || {
+            echo "❌ ОШИБКА при запуске контейнеров";
+            echo "=== Логи контейнеров ===";
+            docker compose -f docker-compose.production.yml logs;
+            exit 1;
+          }
+          
+          echo "=== Проверка работающих контейнеров ==="
+          docker ps || {
+            echo "❌ ОШИБКА: контейнеры не запущены";
+            exit 1;
+          }
+          
+          echo "=== Миграции БД ==="
+          docker compose -f docker-compose.production.yml exec backend python manage.py migrate --no-input || {
+            echo "❌ ОШИБКА при выполнении миграций";
+            exit 1;
+          }
+          
+          echo "=== Сбор статики ==="
+          docker compose -f docker-compose.production.yml exec backend python manage.py collectstatic --no-input || {
+            echo "❌ ОШИБКА при сборе статики";
+            exit 1;
+          }
+          
+          echo "=== Успешное завершение деплоя ==="
+          echo "Дата: $(date)"
