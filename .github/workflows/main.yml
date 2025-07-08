@@ -60,4 +60,4 @@ jobs:
         with:
           context: ./backend/
           push: true
-          tags: msadchikov89@mail.ru/taski_backend:latest
+          tags: mis20/taski_backend:latest
